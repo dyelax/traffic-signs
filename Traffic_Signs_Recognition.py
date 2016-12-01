@@ -27,7 +27,7 @@
 # - sizes -> the original width and height of the image, (width, height)
 # - coords -> coordinates of a bounding box around the sign in the image, (x1, y1, x2, y2). Based the original image (not the resized version).
 
-# In[542]:
+# In[649]:
 
 # Load pickled data
 import pickle
@@ -45,7 +45,7 @@ X_train, y_train = train['features'], train['labels']
 X_test, y_test = test['features'], test['labels']
 
 
-# In[543]:
+# In[650]:
 
 ### To start off let's do a basic data summary.
 
@@ -68,7 +68,7 @@ print("Image data shape =", image_shape)
 print("Number of classes =", n_classes)
 
 
-# In[544]:
+# In[651]:
 
 ### Data exploration visualization goes here.
 ### Feel free to use as many code cells as needed.
@@ -76,7 +76,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# In[545]:
+# In[652]:
 
 # Show one of each sign class
 img_is = []
@@ -96,7 +96,7 @@ for img in signs:
 # Clear that the brightness needs to be normalized
 
 
-# In[546]:
+# In[653]:
 
 # Display histograms of class frequencies
 plt.hist(y_train, bins=n_classes)
@@ -134,7 +134,7 @@ plt.show()
 # 
 # Use the code cell (or multiple code cells, if necessary) to implement the first step of your project. Once you have completed your implementation and are satisfied with the results, be sure to thoroughly answer the questions that follow.
 
-# In[634]:
+# In[655]:
 
 # TEST print out images matched with labels
 label_names = [
@@ -199,7 +199,7 @@ def show_imgs_labels(imgs, labels, num=5):
     
 
 
-# In[635]:
+# In[656]:
 
 ### Preprocess the data here.
 ### Feel free to use as many code cells as needed.
@@ -268,7 +268,7 @@ def preprocess(imgs):
 # plt.show()
 
 
-# In[638]:
+# In[657]:
 
 # preprocess the images
 X_train_processed = preprocess(X_train)
@@ -290,7 +290,7 @@ show_imgs_labels(inputs_train_valid, labels_train_valid)
 
 # **Answer:** I normalized the images by scaling all of their values betweeon -1 and 1 and equalizing the contrast using adaptive hist. I also converted from RGB color to luminance. All of these should help with the brightness/contrast differences in the original images.
 
-# In[641]:
+# In[658]:
 
 ### Generate data additional (if you want to!)
 ### and split the data into training/validation/testing sets here.
@@ -352,7 +352,7 @@ def b(shape, const=0.1):
     return tf.Variable(tf.constant(const, shape=shape))
 
 
-# In[643]:
+# In[730]:
 
 ### Define your architecture here.
 ### Feel free to use as many code cells as needed.
@@ -405,6 +405,9 @@ class Model:
             optimizer = tf.train.AdamOptimizer(learning_rate=self.lrate)
             self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
             
+            self.preds = self.get_preds(self.inputs)
+            self.accuracy, self.update_accuracy_op = tf.contrib.metrics.streaming_accuracy(
+                tf.argmax(self.preds, 1), self.labels)
             
     def get_logits(self, inputs):
         with tf.name_scope('Calculation'):
@@ -426,10 +429,8 @@ class Model:
                     with tf.name_scope(str(layer)):
                         logits = tf.matmul(logits, weight) + bias
                         
-                        # Activate with sigmoid if last layer, otherwise ReLU
-                        if layer == len(self.ws_fc) - 1:
-                            logits = tf.nn.sigmoid(logits)
-                        else:
+                        # Activate with ReLU if not the last layer
+                        if layer < len(self.ws_fc) - 1:
                             logits = tf.nn.relu(logits)
         
         return logits
@@ -445,7 +446,31 @@ class Model:
         if global_step % 10 == 0:
             print('Step {} | Loss: {}'.format(global_step, loss))
             
+        if global_step % 1000 == 0:
+            self.test(inputs_validation, labels_validation)
+            
         return global_step
+    
+    def test(self, inputs, labels):
+        print('-' * 30)
+        batch_gen = gen_epoch(inputs, labels, BATCH_SIZE)
+        
+        total_loss = 0
+        for step, (inputs, labels) in enumerate(batch_gen):
+            feed_dict = {self.inputs: inputs, self.labels: labels}
+            loss, preds, _ = self.sess.run([self.loss, self.preds, self.update_accuracy_op], feed_dict=feed_dict)
+            
+            total_loss += loss
+            
+            if step % 10 == 0:
+                print('TEST | Step {} | Loss: {}'.format(step, loss))
+            
+        avg_loss = total_loss / float(step)
+        accuracy = self.sess.run([self.accuracy])
+        print('FINAL | LOSS: {} | ACCURACY: {}'.format(avg_loss, accuracy))
+        print('-' * 30)
+        
+        return avg_loss, accuracy 
     
 
 
@@ -457,7 +482,7 @@ class Model:
 
 # **Answer:** I chose to use a CNN with 5 convolutional layers, each followed by a 2x2 max pool. The network finishes with 3 fully connected layers.
 
-# In[644]:
+# In[731]:
 
 ##
 # Helpers
@@ -471,7 +496,7 @@ def gen_epoch(inputs, labels, batch_size):
         yield batch_inputs, batch_labels
 
 
-# In[645]:
+# In[732]:
 
 ##
 # Hyperparameters
@@ -479,10 +504,10 @@ def gen_epoch(inputs, labels, batch_size):
 
 BATCH_SIZE = 32
 NUM_EPOCHS = 10
-LRATE = 0.01
+LRATE = 0.001
 
 
-# In[646]:
+# In[733]:
 
 ##
 # Initialization
@@ -490,10 +515,12 @@ LRATE = 0.01
 
 sess = tf.Session()
 model = Model(sess, LRATE)
-sess.run(tf.initialize_all_variables())
+sess.run([tf.initialize_all_variables(), tf.initialize_local_variables()])
+
+saver = tf.train.Saver()
 
 
-# In[647]:
+# In[709]:
 
 ### Train your model here.
 ### Feel free to use as many code cells as needed.
@@ -502,7 +529,17 @@ sess.run(tf.initialize_all_variables())
 for epoch in range(NUM_EPOCHS):
     batch_gen = gen_epoch(inputs_train, labels_train, BATCH_SIZE)
     for (inputs, labels) in batch_gen:
-        model.train(inputs, labels)
+        step = model.train(inputs, labels)
+        
+        # save the model
+        if step % 1000 == 0:
+            save_path = saver.save(sess, "model/model.ckpt")
+            print("Model saved in file: %s" % save_path)
+
+
+# In[ ]:
+
+model.test(inputs.test, labels.test)
 
 
 # ### Question 4
@@ -510,7 +547,7 @@ for epoch in range(NUM_EPOCHS):
 # _How did you train your model? (Type of optimizer, batch size, epochs, hyperparameters, etc.)_
 # 
 
-# **Answer:**
+# **Answer:** I trained my model with an AdamOptimizer for 10 epochs on a batch size of 32. I originally started with a learning rate of 0.1, but bumped it down to 0.01, then 0.001 when the higher learning rates started plateuing and bouncing around at non-optimal loss values.
 
 # ### Question 5
 # 
